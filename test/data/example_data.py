@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# coding: utf-8
 
 """
 This module contains some example data, like messages of different
@@ -104,6 +103,16 @@ TEST_MESSAGES_BASE = sort_messages(
         Message(
             arbitration_id=0x768, is_extended_id=False, timestamp=TEST_TIME + 3.165
         ),
+    ]
+)
+
+
+TEST_MESSAGES_CAN_FD = sort_messages(
+    [
+        Message(is_fd=True, data=range(64)),
+        Message(is_fd=True, data=range(8)),
+        Message(is_fd=True, data=range(8), bitrate_switch=True),
+        Message(is_fd=True, data=range(8), error_state_indicator=True),
     ]
 )
 

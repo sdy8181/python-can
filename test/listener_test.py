@@ -1,14 +1,14 @@
 #!/usr/bin/env python
-# coding: utf-8
 
 """
 """
-
+import asyncio
 import unittest
 import random
 import logging
 import tempfile
 import os
+import warnings
 from os.path import join, dirname
 
 import can
@@ -90,7 +90,9 @@ class ListenerTest(BusTest):
             try:
                 if extension == ".blf":
                     delete = False
-                    file_handler = open(join(dirname(__file__), "data/logfile.blf"))
+                    file_handler = open(
+                        join(dirname(__file__), "data", "test_CanMessage.blf")
+                    )
                 else:
                     delete = True
                     file_handler = tempfile.NamedTemporaryFile(
@@ -153,6 +155,18 @@ class ListenerTest(BusTest):
         self.assertIsNotNone(a_listener.get_message(0.1))
         a_listener.stop()
         self.assertIsNotNone(a_listener.get_message(0.1))
+
+
+def test_deprecated_loop_arg(recwarn):
+    warnings.simplefilter("always")
+    can.AsyncBufferedReader(loop=asyncio.get_event_loop())
+    assert len(recwarn) > 0
+    assert recwarn.pop(DeprecationWarning)
+    recwarn.clear()
+
+    # assert that no warning is shown when loop argument is not used
+    can.AsyncBufferedReader()
+    assert len(recwarn) == 0
 
 
 if __name__ == "__main__":

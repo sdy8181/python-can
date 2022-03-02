@@ -1,21 +1,28 @@
 #!/usr/bin/env python
-# coding: utf-8
 
 """
 Test for Vector Interface
 """
 
 import ctypes
-import time
-import logging
 import os
+import pickle
 import unittest
 from unittest.mock import Mock
 
 import pytest
 
 import can
-from can.interfaces.vector import canlib, xldefine, xlclass
+from can.interfaces.vector import (
+    canlib,
+    xldefine,
+    xlclass,
+    VectorError,
+    VectorInitializationError,
+    VectorOperationError,
+    VectorChannelConfig,
+)
+from test.config import IS_WINDOWS
 
 
 class TestVectorBus(unittest.TestCase):
@@ -101,9 +108,9 @@ class TestVectorBus(unittest.TestCase):
 
         can.interfaces.vector.canlib.xldriver.xlCanFdSetConfiguration.assert_not_called()
         can.interfaces.vector.canlib.xldriver.xlCanSetChannelBitrate.assert_called()
-        xlCanSetChannelBitrate_args = can.interfaces.vector.canlib.xldriver.xlCanSetChannelBitrate.call_args[
-            0
-        ]
+        xlCanSetChannelBitrate_args = (
+            can.interfaces.vector.canlib.xldriver.xlCanSetChannelBitrate.call_args[0]
+        )
         self.assertEqual(xlCanSetChannelBitrate_args[2], 200000)
 
     def test_bus_creation_fd(self) -> None:
@@ -130,12 +137,12 @@ class TestVectorBus(unittest.TestCase):
             fd=True,
             bitrate=500000,
             data_bitrate=2000000,
-            sjwAbr=10,
-            tseg1Abr=11,
-            tseg2Abr=12,
-            sjwDbr=13,
-            tseg1Dbr=14,
-            tseg2Dbr=15,
+            sjw_abr=10,
+            tseg1_abr=11,
+            tseg2_abr=12,
+            sjw_dbr=13,
+            tseg1_dbr=14,
+            tseg2_dbr=15,
             _testing=True,
         )
         self.assertIsInstance(self.bus, canlib.VectorBus)
@@ -153,9 +160,9 @@ class TestVectorBus(unittest.TestCase):
         can.interfaces.vector.canlib.xldriver.xlCanFdSetConfiguration.assert_called()
         can.interfaces.vector.canlib.xldriver.xlCanSetChannelBitrate.assert_not_called()
 
-        xlCanFdSetConfiguration_args = can.interfaces.vector.canlib.xldriver.xlCanFdSetConfiguration.call_args[
-            0
-        ]
+        xlCanFdSetConfiguration_args = (
+            can.interfaces.vector.canlib.xldriver.xlCanFdSetConfiguration.call_args[0]
+        )
         canFdConf = xlCanFdSetConfiguration_args[2]
         self.assertEqual(canFdConf.arbitrationBitRate, 500000)
         self.assertEqual(canFdConf.dataBitRate, 2000000)
@@ -240,12 +247,109 @@ class TestVectorBus(unittest.TestCase):
         can.interfaces.vector.canlib.xldriver.xlDeactivateChannel.assert_called()
         can.interfaces.vector.canlib.xldriver.xlActivateChannel.assert_called()
 
+    def test_popup_hw_cfg(self) -> None:
+        canlib.xldriver.xlPopupHwConfig = Mock()
+        canlib.VectorBus.popup_vector_hw_configuration(10)
+        assert canlib.xldriver.xlPopupHwConfig.called
+        args, kwargs = canlib.xldriver.xlPopupHwConfig.call_args
+        assert isinstance(args[0], ctypes.c_char_p)
+        assert isinstance(args[1], ctypes.c_uint)
+
+    def test_get_application_config(self) -> None:
+        canlib.xldriver.xlGetApplConfig = Mock()
+        canlib.VectorBus.get_application_config(app_name="CANalyzer", app_channel=0)
+        assert canlib.xldriver.xlGetApplConfig.called
+
+    def test_set_application_config(self) -> None:
+        canlib.xldriver.xlSetApplConfig = Mock()
+        canlib.VectorBus.set_application_config(
+            app_name="CANalyzer",
+            app_channel=0,
+            hw_type=xldefine.XL_HardwareType.XL_HWTYPE_VN1610,
+            hw_index=0,
+            hw_channel=0,
+        )
+        assert canlib.xldriver.xlSetApplConfig.called
+
+    def test_set_timer_rate(self) -> None:
+        canlib.xldriver.xlSetTimerRate = Mock()
+        bus: canlib.VectorBus = can.Bus(
+            channel=0, bustype="vector", fd=True, _testing=True
+        )
+        bus.set_timer_rate(timer_rate_ms=1)
+        assert canlib.xldriver.xlSetTimerRate.called
+
     def test_called_without_testing_argument(self) -> None:
         """This tests if an exception is thrown when we are not running on Windows."""
         if os.name != "nt":
-            with self.assertRaises(OSError):
-                # do not set the _testing argument, since it supresses the exception
+            with self.assertRaises(can.CanInterfaceNotImplementedError):
+                # do not set the _testing argument, since it would suppress the exception
                 can.Bus(channel=0, bustype="vector")
+
+    def test_vector_error_pickle(self) -> None:
+        for error_type in [
+            VectorError,
+            VectorInitializationError,
+            VectorOperationError,
+        ]:
+            with self.subTest(f"error_type = {error_type.__name__}"):
+
+                error_code = 118
+                error_string = "XL_ERROR"
+                function = "function_name"
+
+                exc = error_type(error_code, error_string, function)
+
+                # pickle and unpickle
+                p = pickle.dumps(exc)
+                exc_unpickled: VectorError = pickle.loads(p)
+
+                self.assertEqual(str(exc), str(exc_unpickled))
+                self.assertEqual(error_code, exc_unpickled.error_code)
+
+                with pytest.raises(error_type):
+                    raise exc_unpickled
+
+    def test_vector_subtype_error_from_generic(self) -> None:
+        for error_type in [VectorInitializationError, VectorOperationError]:
+            with self.subTest(f"error_type = {error_type.__name__}"):
+
+                error_code = 118
+                error_string = "XL_ERROR"
+                function = "function_name"
+
+                generic = VectorError(error_code, error_string, function)
+
+                # pickle and unpickle
+                specific: VectorError = error_type.from_generic(generic)
+
+                self.assertEqual(str(generic), str(specific))
+                self.assertEqual(error_code, specific.error_code)
+
+                with pytest.raises(error_type):
+                    raise specific
+
+    @unittest.skipUnless(IS_WINDOWS, "Windows specific test")
+    def test_winapi_availability(self) -> None:
+        self.assertIsNotNone(canlib.WaitForSingleObject)
+        self.assertIsNotNone(canlib.INFINITE)
+
+
+class TestVectorChannelConfig:
+    def test_attributes(self):
+        assert hasattr(VectorChannelConfig, "name")
+        assert hasattr(VectorChannelConfig, "hwType")
+        assert hasattr(VectorChannelConfig, "hwIndex")
+        assert hasattr(VectorChannelConfig, "hwChannel")
+        assert hasattr(VectorChannelConfig, "channelIndex")
+        assert hasattr(VectorChannelConfig, "channelMask")
+        assert hasattr(VectorChannelConfig, "channelCapabilities")
+        assert hasattr(VectorChannelConfig, "channelBusCapabilities")
+        assert hasattr(VectorChannelConfig, "isOnBus")
+        assert hasattr(VectorChannelConfig, "connectedBusType")
+        assert hasattr(VectorChannelConfig, "serialNumber")
+        assert hasattr(VectorChannelConfig, "articleNumber")
+        assert hasattr(VectorChannelConfig, "transceiverName")
 
 
 def xlGetApplConfig(
@@ -257,7 +361,7 @@ def xlGetApplConfig(
     bus_type: ctypes.c_uint,
 ) -> int:
     hw_type.value = 1
-    hw_channel.value = app_channel
+    hw_channel.value = 0
     return 0
 
 
